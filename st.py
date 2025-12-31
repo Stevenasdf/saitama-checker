@@ -1,4 +1,4 @@
-# st.py - Stripe Checker para SaitamaChk (FINAL)
+# st.py - Stripe Checker para SaitamaChk (FULL FIXED)
 
 import logging
 import re
@@ -27,7 +27,7 @@ CONNECT_TIMEOUT = 15
 CC_REGEX = r'(\d{14,16})[:,;/|•\s]+(\d{1,2})[:,;/|•\s]+(\d{2,4})[:,;/|•\s]+(\d{3,4})'
 
 # ==============================
-# CONCURRENCIA PERSONAL
+# CONCURRENCIA
 # ==============================
 
 busy_users = {}
@@ -85,7 +85,7 @@ def get_bin(card_number: str):
     return get_bin_info(card_number[:6])
 
 # ==============================
-# API CALL
+# API CALL (SAFE JSON)
 # ==============================
 
 async def check_stripe(card, site):
@@ -100,23 +100,31 @@ async def check_stripe(card, site):
     )
 
     try:
-        async with aiohttp.ClientSession(timeout=timeout) as s:
-            async with s.get(url) as r:
-                data = await r.json()
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.get(url) as resp:
+                raw_text = await resp.text()
+
+                try:
+                    data = await resp.json()
+                except Exception:
+                    logger.error(f"API NO JSON: {raw_text}")
+                    return "Error", raw_text[:300]
+
                 return (
-                    data.get("Status", "N/A"),
+                    data.get("Status", "Error"),
                     data.get("Response", "N/A")
                 )
+
     except asyncio.TimeoutError:
         return "Error", "TIMEOUT"
     except Exception as e:
-        return "Error", str(e)[:80]
+        return "Error", str(e)
 
 # ==============================
 # FORMATO FINAL
 # ==============================
 
-def format_result(cc, status, response, bininfo, site_i, t, user):
+def format_result(cc, status, response, bininfo, site_number, t, user):
     return (
         f"{BOT_TAG} <b>Gateway:</b> <code>Stripe</code>\n"
         "━━━━━━━━━━━━━━━━\n"
@@ -128,14 +136,14 @@ def format_result(cc, status, response, bininfo, site_i, t, user):
         f"{BOT_TAG} <b>Bank:</b> <code>{bininfo['bank']}</code>\n"
         f"{BOT_TAG} <b>Country:</b> <code>{bininfo['country']}</code>\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"{BOT_TAG} <b>Site:</b> {site_i}\n"
+        f"{BOT_TAG} <b>Site:</b> {site_number}\n"
         f"{BOT_TAG} <b>Time:</b> {t:.2f}s\n"
         "━━━━━━━━━━━━━━━━\n"
         f"{BOT_TAG} <b>Req by:</b> @{user}"
     )
 
 # ==============================
-# /ST
+# /ST COMMAND
 # ==============================
 
 async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -148,7 +156,7 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if not can_run(uid):
         await msg.reply_text(
-            "⏳ Límite de verificaciones simultáneas alcanzado.",
+            "⏳ Límite de verificaciones alcanzado.",
             reply_to_message_id=msg.message_id
         )
         return
@@ -162,7 +170,7 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if len(msg.text.split(maxsplit=1)) < 2:
         await msg.reply_text(
-            "⚠️ Uso: <code>/st n|mm|yy|cvv</code>",
+            "⚠️ Uso: <code>/st cc|mm|yy|cvv</code>",
             parse_mode="HTML",
             reply_to_message_id=msg.message_id
         )
@@ -194,8 +202,8 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
     start = time.time()
 
     try:
-        site_i = 0
-        site = sites[site_i]
+        site = sites[0]              # SOLO 1 SITE
+        site_number = 1              # FIX SITE BUG
 
         status, response = await check_stripe(card, site)
         elapsed = time.time() - start
@@ -208,7 +216,7 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status,
                 response,
                 bininfo,
-                site_i + 1,
+                site_number,
                 elapsed,
                 user
             ),
@@ -233,4 +241,4 @@ async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register_handlers(app):
     app.add_handler(CommandHandler("st", handle_st))
     app.add_handler(MessageHandler(filters.Regex(r"^\.st\b"), handle_dot))
-    logger.info("Handlers Stripe Checker cargados")
+    logger.info("Stripe Checker cargado correctamente")
