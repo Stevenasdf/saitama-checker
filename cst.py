@@ -6,22 +6,26 @@ import db
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 
-STRIPE_API_BASE = "https://md-auto-stripe.onrender.com/gateway=AutoStripe/key=md-tech"
+# ==============================
+# CONFIG
+# ==============================
+
+API_URL = "https://md-auto-stripe.onrender.com/gateway=AutoStripe/key=md-tech"
 TEST_CC = "4487757834478421|04|2030|887"
 
-TIMEOUT = aiohttp.ClientTimeout(total=45)
+TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
 
 # ==============================
 # RESPUESTAS VÁLIDAS
 # ==============================
 
 VALID_RESPONSES = {
-    "card added",
-    "your card's security code is incorrect",
-    "your card number is incorrect",
-    "your card was declined",
-    "this credit card type is not accepted",
-    "your card does not support this type of purchase",
+    "Card added",
+    "Your card's security code is incorrect.",
+    "your card number is incorrect.",
+    "Your card was declined.",
+    "This credit card type is not accepted.",
+    "Your card does not support this type of purchase.",
 }
 
 # ==============================
@@ -43,15 +47,33 @@ def is_valid_response(resp: str) -> bool:
     r = resp.lower()
     return any(v in r for v in VALID_RESPONSES)
 
+# ==============================
+# API CALL (MEJORADO)
+# ==============================
 
 async def check_site(session: aiohttp.ClientSession, site: str):
     site_clean = clean_site(site)
-    url = f"{STRIPE_API_BASE}/site={site_clean}/cc={TEST_CC}"
+    url = f"{API_URL}/site={site_clean}/cc={TEST_CC}"
 
     try:
         async with session.get(url) as r:
-            data = await r.json()
-            return site, data.get("Response", "N/A")
+            # HTTP inválido
+            if r.status != 200:
+                return site, f"HTTP_{r.status}"
+
+            # Intentar JSON
+            try:
+                data = await r.json()
+                return site, data.get("Response", "N/A")
+            except Exception:
+                # Fallback texto crudo (API bug / HTML)
+                raw = await r.text()
+                return site, raw[:120]
+
+    except asyncio.TimeoutError:
+        return site, "TIMEOUT"
+    except aiohttp.ClientError as e:
+        return site, f"CONN_ERR: {str(e)[:40]}"
     except Exception as e:
         return site, str(e)[:40]
 
@@ -107,7 +129,7 @@ async def handle_cst(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final = (
         "<b>💳 STRIPE SITE CHECK</b>\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"<pre>{chr(10).join(results)}</pre>\n"
+        f"<pre>{chr(10).join(results)}</pre>"
         "━━━━━━━━━━━━━━━━\n"
         f"📊 <b>Total:</b> {len(sites)}\n"
         f"🗑️ <b>Removed:</b> {removed}"
