@@ -6,7 +6,11 @@ import db
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 
-API_URL = "https://blmautoshopify.onrender.com/berlin.php"
+# ==============================
+# CONFIG - NUEVA API
+# ==============================
+
+API_URL = "https://shopi-production-7ef9.up.railway.app/"
 TEST_CARD = "4737023061083279|08|2028|833"
 
 # ==============================
@@ -17,6 +21,8 @@ VALID_RESPONSES = {
     "3d_authentication",
     "insufficient_funds",
     "incorrect_zip",
+    "order_completed",
+    "order completed",
     "order_placed",
     "order placed",
     "thank_you",
@@ -49,7 +55,7 @@ def is_valid_response(resp: str) -> bool:
 
 async def check_site(session: aiohttp.ClientSession, site: str, proxy: str):
     params = {
-        "site": format_site(site),
+        "url": format_site(site),   # ← cambiado
         "cc": TEST_CARD,
         "proxy": proxy,
     }
@@ -60,7 +66,7 @@ async def check_site(session: aiohttp.ClientSession, site: str, proxy: str):
         async with session.get(API_URL, params=params, timeout=timeout) as r:
             data = await r.json()
             return (
-                data.get("Gateway", "N/A"),
+                data.get("Gate", "N/A"),     # ← cambiado
                 data.get("Price", "0"),
                 data.get("Response", "N/A"),
             )
@@ -121,8 +127,8 @@ async def handle_csh(update: Update, context: ContextTypes.DEFAULT_TYPE):
             results.append(
                 f"Site: {site}\n"
                 f"Gateway: {gateway} {price}\n"
-                f"Proxy: {proxy_num}\n"
                 f"Response: {response}\n"
+                f"Proxy: {proxy_num}\n"
             )
 
             if not is_valid_response(response):
@@ -134,7 +140,7 @@ async def handle_csh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     final = (
         "<b>🛒 SHOPIFY SITE CHECK</b>\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"<pre>{chr(10).join(results)}</pre>\n"
+        f"<pre>{chr(10).join(results)}</pre>"
         "━━━━━━━━━━━━━━━━\n"
         f"📊 <b>Total:</b> {len(sites)}\n"
         f"🗑️ <b>Removed:</b> {removed}"
