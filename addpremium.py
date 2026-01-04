@@ -1,4 +1,4 @@
-# addpremium.py - Gestión de Premium (LIMPIO + DB COMPATIBLE)
+# addpremium.py - Gestión de Premium (TIME BASED + DB COMPATIBLE)
 
 import logging
 import db
@@ -41,6 +41,7 @@ def add_premium_msg(executor, target_id, added, total):
         f"📅 <b>Días totales:</b> {total:,}\n"
         f"👑 <b>Por:</b> {executor}"
     )
+
 
 def del_premium_msg(executor, target_id):
     return (
@@ -106,30 +107,36 @@ async def handle_addpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if user["days"] >= MAX_DAYS:
+    current_days = db.get_premium_days_left(target_id)
+    if current_days >= MAX_DAYS:
         await msg.reply_text(
             f"❌ El usuario ya tiene el máximo de días ({MAX_DAYS:,}).",
             reply_to_message_id=msg.message_id
         )
         return
 
-    new_total = min(user["days"] + days, MAX_DAYS)
-    added = new_total - user["days"]
+    allowed_days = min(days, MAX_DAYS - current_days)
 
-    db.update_user_days(target_id, added)
+    db.add_premium_days(target_id, allowed_days)
 
-    if user["rank"] == "free" and new_total > 0:
-        db.update_user_rank(target_id, "premium")
-
-    executor_name = update.effective_user.username or update.effective_user.first_name
+    executor_name = (
+        update.effective_user.username
+        or update.effective_user.first_name
+        or str(uid)
+    )
 
     await msg.reply_text(
-        add_premium_msg(executor_name, target_id, added, new_total),
+        add_premium_msg(
+            executor_name,
+            target_id,
+            allowed_days,
+            current_days + allowed_days
+        ),
         parse_mode="HTML",
         reply_to_message_id=msg.message_id
     )
 
-    log.info(f"{uid} agregó {added} días a {target_id}")
+    log.info(f"{uid} agregó {allowed_days} días premium a {target_id}")
 
 # ==============================
 # /DELPREMIUM
@@ -178,13 +185,13 @@ async def handle_delpremium(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    if user["days"] > 0:
-        db.update_user_days(target_id, -user["days"])
+    db.remove_premium(target_id)
 
-    if user["rank"] != "free":
-        db.update_user_rank(target_id, "free")
-
-    executor_name = update.effective_user.username or update.effective_user.first_name
+    executor_name = (
+        update.effective_user.username
+        or update.effective_user.first_name
+        or str(uid)
+    )
 
     await msg.reply_text(
         del_premium_msg(executor_name, target_id),
