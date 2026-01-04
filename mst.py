@@ -1,4 +1,4 @@
-# mst.py - Mass Stripe Checker para SaitamaChk (FULL FIXED + REPLY)
+# mst.py - Mass Stripe Checker para SaitamaChk (FINAL)
 
 import re
 import time
@@ -29,16 +29,14 @@ DELAY = 0.35
 
 CC_REGEX = r'(\d{14,16})[:,;/|•\s]+(\d{1,2})[:,;/|•\s]+(\d{2,4})[:,;/|•\s]+(\d{3,4})'
 
-# ==============================
-# CONCURRENCIA
-# ==============================
-
 busy_users = {}
 
+# ==============================
+# LIMITES
+# ==============================
+
 def get_limit(uid: int) -> int:
-    if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid):
-        return 4
-    return 2
+    return 4 if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid) else 2
 
 def can_run(uid: int) -> bool:
     return busy_users.get(uid, 0) < get_limit(uid)
@@ -50,7 +48,7 @@ def mark_end(uid: int):
     if uid in busy_users:
         busy_users[uid] -= 1
         if busy_users[uid] <= 0:
-            del busy_users[uid]
+            busy_users.pop(uid, None)
 
 # ==============================
 # HELPERS
@@ -67,6 +65,13 @@ def extract_cards(text: str):
 
     return cards
 
+def clean_site(site: str) -> str:
+    return site.replace("https://", "").replace("http://", "").replace("www.", "")
+
+# ==============================
+# STATUS (NORMALIZADO)
+# ==============================
+
 def format_status(status: str) -> str:
     s = status.lower()
     if "approved" in s:
@@ -75,11 +80,8 @@ def format_status(status: str) -> str:
         return "Declined ❌"
     return "Error ⚠️"
 
-def clean_site(site: str) -> str:
-    return site.replace("https://", "").replace("http://", "").replace("www.", "")
-
 # ==============================
-# API CALL (SAFE JSON)
+# API CALL
 # ==============================
 
 async def check_stripe(cc: str, site: str):
@@ -94,13 +96,11 @@ async def check_stripe(cc: str, site: str):
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
-                raw_text = await resp.text()
-
                 try:
                     data = await resp.json()
                 except Exception:
-                    logger.error(f"API NO JSON: {raw_text}")
-                    return "Error", raw_text[:300]
+                    raw = await resp.text()
+                    return "Error", raw[:200]
 
                 return (
                     data.get("Status", "Error"),
@@ -116,17 +116,17 @@ async def check_stripe(cc: str, site: str):
 # FORMATO BLOQUE
 # ==============================
 
-def format_block(cc, status, response, site_number):
+def format_block(cc, status, response, site_i):
     return (
         f"<b>CC:</b> <code>{cc}</code>\n"
         f"<b>Status:</b> <code>{format_status(status)}</code>\n"
         f"<b>Response:</b> <code>{response}</code>\n"
-        f"<b>Site:</b> {site_number}\n"
+        f"<b>Site:</b> {site_i}\n"
         "━━━━━━━━━━━━━━━━\n"
     )
 
 # ==============================
-# /MST COMMAND
+# /MST
 # ==============================
 
 async def handle_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -138,77 +138,41 @@ async def handle_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not can_run(uid):
-        await msg.reply_text(
-            "⏳ Límite de ejecuciones alcanzado.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("⏳ Límite de ejecuciones alcanzado.", reply_to_message_id=msg.message_id)
         return
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
+    # 👉 MENSAJE + REPLY (igual que msh)
     text = msg.text or ""
-    raw = ""
+    if msg.reply_to_message and msg.reply_to_message.text:
+        text += "\n" + msg.reply_to_message.text
 
-    if text.startswith("."):
-        raw = " ".join(text.split()[1:])
-    else:
-        raw = " ".join(context.args)
-
-    if not raw and msg.reply_to_message:
-        raw = msg.reply_to_message.text or ""
-
-    if not raw.strip():
-        await msg.reply_text(
-            "⚠️ Uso: <code>/mst lista_de_ccs</code>",
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
-        return
-
-    cards = extract_cards(raw)
+    cards = extract_cards(text)
     if not cards:
-        await msg.reply_text(
-            "❌ No se detectaron CCs válidas.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ No se detectaron CCs válidas.", reply_to_message_id=msg.message_id)
         return
 
     sites = db.get_user_stripe_sites(uid)
     if not sites:
-        await msg.reply_text(
-            "❌ No tienes sitios Stripe.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ No tienes sitios Stripe.", reply_to_message_id=msg.message_id)
         return
 
     mark_start(uid)
-
-    processing = await msg.reply_text(
-        "🔄 Checking Stripe...",
-        reply_to_message_id=msg.message_id
-    )
+    processing = await msg.reply_text("🔄 Checking Stripe...", reply_to_message_id=msg.message_id)
 
     start = time.time()
     blocks = []
 
     try:
-        cc_idx = 0
-
-        for cc in cards:
-            cc_idx += 1
-            site_index = (cc_idx - 1) % len(sites)
-            site = sites[site_index]
+        for i, cc in enumerate(cards):
+            site_i = i % len(sites)
+            site = sites[site_i]
 
             status, response = await check_stripe(cc, site)
-
-            blocks.append(
-                format_block(cc, status, response, site_index + 1)
-            )
+            blocks.append(format_block(cc, status, response, site_i + 1))
 
             await asyncio.sleep(DELAY)
 
@@ -217,8 +181,9 @@ async def handle_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         final = (
             f"{BOT_TAG} <b>Mass Stripe</b>\n"
             "━━━━━━━━━━━━━━━━\n"
-            + "".join(blocks)
-            + f"{BOT_TAG} <b>Total:</b> {len(cards)} | <b>Time:</b> {elapsed:.2f}s\n"
+            f"{''.join(blocks)}"
+            f"{BOT_TAG} <b>Total:</b> {len(cards)}\n"
+            f"{BOT_TAG} <b>Time:</b> {elapsed:.2f}s\n"
             f"{BOT_TAG} <b>Req by:</b> @{user}"
         )
 
@@ -232,18 +197,10 @@ async def handle_mst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mark_end(uid)
 
 # ==============================
-# DOT
-# ==============================
-
-async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.startswith(".mst"):
-        await handle_mst(update, context)
-
-# ==============================
 # REGISTER
 # ==============================
 
 def register_handlers(app):
     app.add_handler(CommandHandler("mst", handle_mst))
-    app.add_handler(MessageHandler(filters.Regex(r"^\.mst\b"), handle_dot))
-    logger.info("Mass Stripe Checker cargado correctamente")
+    app.add_handler(MessageHandler(filters.Regex(r"^\.mst\b"), handle_mst))
+    logger.info("Handlers MST cargados")
