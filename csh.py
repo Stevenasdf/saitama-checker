@@ -1,24 +1,29 @@
-# csh.py - Shopify Site Checker (FINAL DB COMPATIBLE)
+# csh.py - Shopify Site Checker para SaitamaChk (FINAL)
 
 import asyncio
 import aiohttp
+
 import db
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 
 # ==============================
-# CONFIG - NUEVA API
+# CONFIG
 # ==============================
 
 API_URL = "https://shopi-production-7ef9.up.railway.app/"
 TEST_CARD = "4737023061083279|08|2028|833"
 
+TIMEOUT = aiohttp.ClientTimeout(total=60, connect=15)
+DELAY = 0.35
+
 # ==============================
 # RESPUESTAS VÁLIDAS
 # ==============================
 
-VALID_RESPONSES = {
+VALID_RESPONSES = (
     "3d_authentication",
+    "otp_required",
     "insufficient_funds",
     "incorrect_zip",
     "order_completed",
@@ -35,7 +40,7 @@ VALID_RESPONSES = {
     "processing_error",
     "fraud_suspected",
     "risky",
-}
+)
 
 # ==============================
 # HELPERS
@@ -45,33 +50,39 @@ def format_site(site: str) -> str:
     site = site.strip()
     return site if site.startswith(("http://", "https://")) else f"https://{site}"
 
-
 def is_valid_response(resp: str) -> bool:
     if not resp:
         return False
     r = resp.lower()
     return any(v in r for v in VALID_RESPONSES)
 
+# ==============================
+# API CALL
+# ==============================
 
 async def check_site(session: aiohttp.ClientSession, site: str, proxy: str):
     params = {
-        "url": format_site(site),   # ← cambiado
+        "url": format_site(site),
         "cc": TEST_CARD,
         "proxy": proxy,
     }
 
-    timeout = aiohttp.ClientTimeout(total=60, connect=15)
-
     try:
-        async with session.get(API_URL, params=params, timeout=timeout) as r:
+        async with session.get(API_URL, params=params, timeout=TIMEOUT) as r:
+            if r.status != 200:
+                return "N/A", "0", f"HTTP_{r.status}"
+
             data = await r.json()
             return (
-                data.get("Gate", "N/A"),     # ← cambiado
+                data.get("Gate", "N/A"),
                 data.get("Price", "0"),
                 data.get("Response", "N/A"),
             )
+
+    except asyncio.TimeoutError:
+        return "Error", "0", "TIMEOUT"
     except Exception as e:
-        return ("Error", "0", str(e)[:40])
+        return "Error", "0", str(e)[:40]
 
 # ==============================
 # /CSH
@@ -93,20 +104,14 @@ async def handle_csh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     proxies = db.get_user_proxies(uid)
 
     if not sites:
-        await msg.reply_text(
-            "📭 No tienes sitios Shopify.",
-            reply_to_message_id=msg.message_id,
-        )
+        await msg.reply_text("📭 No tienes sitios Shopify.", reply_to_message_id=msg.message_id)
         return
 
     if not proxies:
-        await msg.reply_text(
-            "❌ No tienes proxies configuradas.",
-            reply_to_message_id=msg.message_id,
-        )
+        await msg.reply_text("❌ No tienes proxies configuradas.", reply_to_message_id=msg.message_id)
         return
 
-    status = await msg.reply_text(
+    status_msg = await msg.reply_text(
         f"🔍 <b>Checking {len(sites)} Shopify sites...</b>",
         parse_mode="HTML",
         reply_to_message_id=msg.message_id,
@@ -135,7 +140,7 @@ async def handle_csh(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.remove_user_shopify_site(uid, site)
                 removed += 1
 
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(DELAY)
 
     final = (
         "<b>🛒 SHOPIFY SITE CHECK</b>\n"
@@ -146,14 +151,14 @@ async def handle_csh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗑️ <b>Removed:</b> {removed}"
     )
 
-    await status.edit_text(
+    await status_msg.edit_text(
         final,
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
 
 # ==============================
-# COMANDOS CON PUNTO
+# DOT
 # ==============================
 
 async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -161,11 +166,9 @@ async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_csh(update, context)
 
 # ==============================
-# REGISTRO
+# REGISTER
 # ==============================
 
-def register_handlers(application):
-    application.add_handler(CommandHandler("csh", handle_csh))
-    application.add_handler(
-        MessageHandler(filters.Regex(r"^\.csh$"), handle_dot)
-    )
+def register_handlers(app):
+    app.add_handler(CommandHandler("csh", handle_csh))
+    app.add_handler(MessageHandler(filters.Regex(r"^\.csh$"), handle_dot))
