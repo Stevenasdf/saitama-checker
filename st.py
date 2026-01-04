@@ -1,4 +1,4 @@
-# st.py - Stripe Checker para SaitamaChk (FULL FIXED)
+# st.py - Stripe Checker para SaitamaChk (FINAL)
 
 import logging
 import re
@@ -26,16 +26,14 @@ CONNECT_TIMEOUT = 15
 
 CC_REGEX = r'(\d{14,16})[:,;/|•\s]+(\d{1,2})[:,;/|•\s]+(\d{2,4})[:,;/|•\s]+(\d{3,4})'
 
-# ==============================
-# CONCURRENCIA
-# ==============================
-
 busy_users = {}
 
+# ==============================
+# LIMITES
+# ==============================
+
 def get_limit(uid: int) -> int:
-    if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid):
-        return 4
-    return 2
+    return 4 if db.is_owner(uid) or db.is_admin(uid) or db.is_premium(uid) else 2
 
 def can_run(uid: int) -> bool:
     return busy_users.get(uid, 0) < get_limit(uid)
@@ -47,17 +45,16 @@ def mark_end(uid: int):
     if uid in busy_users:
         busy_users[uid] -= 1
         if busy_users[uid] <= 0:
-            del busy_users[uid]
+            busy_users.pop(uid, None)
 
 # ==============================
 # HELPERS
 # ==============================
 
-def extract_card(text):
+def extract_card(text: str):
     m = re.search(CC_REGEX, text)
     if not m:
         return None
-
     n, mm, yy, cvv = m.groups()
     return {
         "number": n,
@@ -69,14 +66,6 @@ def extract_card(text):
 def build_cc(c):
     return f"{c['number']}|{c['month']}|20{c['year']}|{c['cvv']}"
 
-def format_status(status: str) -> str:
-    s = status.lower()
-    if "approved" in s:
-        return "Approved ✅"
-    if "declined" in s:
-        return "Declined ❌"
-    return f"{status} ⚠️"
-
 def clean_site(site: str) -> str:
     return site.replace("https://", "").replace("http://", "").replace("www.", "")
 
@@ -85,30 +74,36 @@ def get_bin(card_number: str):
     return get_bin_info(card_number[:6])
 
 # ==============================
-# API CALL (SAFE JSON)
+# STATUS (NORMALIZADO)
+# ==============================
+
+def format_status(status: str) -> str:
+    s = status.lower()
+    if "approved" in s:
+        return "Approved ✅"
+    if "declined" in s:
+        return "Declined ❌"
+    return "Error ⚠️"
+
+# ==============================
+# API CALL
 # ==============================
 
 async def check_stripe(card, site):
     cc = build_cc(card)
     site_clean = clean_site(site)
-
     url = f"{STRIPE_API_BASE}/site={site_clean}/cc={cc}"
 
-    timeout = aiohttp.ClientTimeout(
-        total=REQUEST_TIMEOUT,
-        connect=CONNECT_TIMEOUT
-    )
+    timeout = aiohttp.ClientTimeout(total=REQUEST_TIMEOUT, connect=CONNECT_TIMEOUT)
 
     try:
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.get(url) as resp:
-                raw_text = await resp.text()
-
                 try:
                     data = await resp.json()
                 except Exception:
-                    logger.error(f"API NO JSON: {raw_text}")
-                    return "Error", raw_text[:300]
+                    raw = await resp.text()
+                    return "Error", raw[:200]
 
                 return (
                     data.get("Status", "Error"),
@@ -118,13 +113,13 @@ async def check_stripe(card, site):
     except asyncio.TimeoutError:
         return "Error", "TIMEOUT"
     except Exception as e:
-        return "Error", str(e)
+        return "Error", str(e)[:80]
 
 # ==============================
 # FORMATO FINAL
 # ==============================
 
-def format_result(cc, status, response, bininfo, site_number, t, user):
+def format_result(cc, status, response, bininfo, site_i, t, user):
     return (
         f"{BOT_TAG} <b>Gateway:</b> <code>Stripe</code>\n"
         "━━━━━━━━━━━━━━━━\n"
@@ -136,14 +131,13 @@ def format_result(cc, status, response, bininfo, site_number, t, user):
         f"{BOT_TAG} <b>Bank:</b> <code>{bininfo['bank']}</code>\n"
         f"{BOT_TAG} <b>Country:</b> <code>{bininfo['country']}</code>\n"
         "━━━━━━━━━━━━━━━━\n"
-        f"{BOT_TAG} <b>Site:</b> {site_number}\n"
+        f"{BOT_TAG} <b>Site:</b> {site_i}\n"
         f"{BOT_TAG} <b>Time:</b> {t:.2f}s\n"
-        "━━━━━━━━━━━━━━━━\n"
         f"{BOT_TAG} <b>Req by:</b> @{user}"
     )
 
 # ==============================
-# /ST COMMAND
+# /ST
 # ==============================
 
 async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -155,59 +149,36 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if not can_run(uid):
-        await msg.reply_text(
-            "⏳ Límite de verificaciones alcanzado.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("⏳ Límite de verificaciones alcanzado.", reply_to_message_id=msg.message_id)
         return
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
-    if len(msg.text.split(maxsplit=1)) < 2:
-        await msg.reply_text(
-            "⚠️ Uso: <code>/st cc|mm|yy|cvv</code>",
-            parse_mode="HTML",
-            reply_to_message_id=msg.message_id
-        )
-        return
+    # 👉 MENSAJE + REPLY
+    text = msg.text or ""
+    if msg.reply_to_message and msg.reply_to_message.text:
+        text += "\n" + msg.reply_to_message.text
 
-    card = extract_card(msg.text)
+    card = extract_card(text)
     if not card:
-        await msg.reply_text(
-            "❌ Formato de tarjeta inválido.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ No se detectó una CC válida.", reply_to_message_id=msg.message_id)
         return
 
     sites = db.get_user_stripe_sites(uid)
     if not sites:
-        await msg.reply_text(
-            "❌ No tienes sitios Stripe.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ No tienes sitios Stripe.", reply_to_message_id=msg.message_id)
         return
 
     mark_start(uid)
-
-    processing = await msg.reply_text(
-        "🔄 Checking Stripe...",
-        reply_to_message_id=msg.message_id
-    )
-
+    processing = await msg.reply_text("🔄 Checking Stripe...", reply_to_message_id=msg.message_id)
     start = time.time()
 
     try:
-        site = sites[0]              # SOLO 1 SITE
-        site_number = 1              # FIX SITE BUG
-
+        site = sites[0]
         status, response = await check_stripe(card, site)
         elapsed = time.time() - start
-
         bininfo = get_bin(card["number"])
 
         await processing.edit_text(
@@ -216,7 +187,7 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 status,
                 response,
                 bininfo,
-                site_number,
+                1,
                 elapsed,
                 user
             ),
@@ -227,18 +198,10 @@ async def handle_st(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mark_end(uid)
 
 # ==============================
-# DOT
-# ==============================
-
-async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.message.text.startswith(".st"):
-        await handle_st(update, context)
-
-# ==============================
 # REGISTER
 # ==============================
 
 def register_handlers(app):
     app.add_handler(CommandHandler("st", handle_st))
-    app.add_handler(MessageHandler(filters.Regex(r"^\.st\b"), handle_dot))
-    logger.info("Stripe Checker cargado correctamente")
+    app.add_handler(MessageHandler(filters.Regex(r"^\.st\b"), handle_st))
+    logger.info("Handlers ST cargados")
