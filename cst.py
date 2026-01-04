@@ -1,7 +1,8 @@
-# cst.py - Stripe Site Checker (FINAL DB COMPATIBLE)
+# cst.py - Stripe Site Checker para SaitamaChk (FINAL)
 
 import asyncio
 import aiohttp
+
 import db
 from telegram import Update
 from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
@@ -14,32 +15,27 @@ API_URL = "https://md-auto-stripe.onrender.com/gateway=AutoStripe/key=md-tech"
 TEST_CC = "4487757834478421|04|2030|887"
 
 TIMEOUT = aiohttp.ClientTimeout(total=60, connect=20)
+DELAY = 0.35
 
 # ==============================
 # RESPUESTAS VÁLIDAS
 # ==============================
 
-VALID_RESPONSES = {
-    "Card added",
-    "Your card's security code is incorrect.",
-    "your card number is incorrect.",
-    "Your card was declined.",
-    "This credit card type is not accepted.",
-    "Your card does not support this type of purchase.",
-}
+VALID_RESPONSES = (
+    "card added",
+    "security code is incorrect",
+    "card number is incorrect",
+    "card was declined",
+    "credit card type is not accepted",
+    "does not support this type of purchase",
+)
 
 # ==============================
 # HELPERS
 # ==============================
 
 def clean_site(site: str) -> str:
-    return (
-        site.replace("https://", "")
-        .replace("http://", "")
-        .replace("www.", "")
-        .strip()
-    )
-
+    return site.replace("https://", "").replace("http://", "").replace("www.", "").strip()
 
 def is_valid_response(resp: str) -> bool:
     if not resp:
@@ -48,7 +44,7 @@ def is_valid_response(resp: str) -> bool:
     return any(v in r for v in VALID_RESPONSES)
 
 # ==============================
-# API CALL (MEJORADO)
+# API CALL
 # ==============================
 
 async def check_site(session: aiohttp.ClientSession, site: str):
@@ -57,16 +53,13 @@ async def check_site(session: aiohttp.ClientSession, site: str):
 
     try:
         async with session.get(url) as r:
-            # HTTP inválido
             if r.status != 200:
                 return site, f"HTTP_{r.status}"
 
-            # Intentar JSON
             try:
                 data = await r.json()
                 return site, data.get("Response", "N/A")
             except Exception:
-                # Fallback texto crudo (API bug / HTML)
                 raw = await r.text()
                 return site, raw[:120]
 
@@ -94,15 +87,11 @@ async def handle_cst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     sites = db.get_user_stripe_sites(uid)
-
     if not sites:
-        await msg.reply_text(
-            "📭 No tienes sitios Stripe.",
-            reply_to_message_id=msg.message_id,
-        )
+        await msg.reply_text("📭 No tienes sitios Stripe.", reply_to_message_id=msg.message_id)
         return
 
-    status = await msg.reply_text(
+    status_msg = await msg.reply_text(
         f"🔍 <b>Checking {len(sites)} Stripe sites...</b>",
         parse_mode="HTML",
         reply_to_message_id=msg.message_id,
@@ -124,7 +113,7 @@ async def handle_cst(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 db.remove_user_stripe_site(uid, site_name)
                 removed += 1
 
-            await asyncio.sleep(0.35)
+            await asyncio.sleep(DELAY)
 
     final = (
         "<b>💳 STRIPE SITE CHECK</b>\n"
@@ -135,14 +124,14 @@ async def handle_cst(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🗑️ <b>Removed:</b> {removed}"
     )
 
-    await status.edit_text(
+    await status_msg.edit_text(
         final,
         parse_mode="HTML",
         disable_web_page_preview=True,
     )
 
 # ==============================
-# COMANDOS CON PUNTO
+# DOT
 # ==============================
 
 async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -150,11 +139,9 @@ async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_cst(update, context)
 
 # ==============================
-# REGISTRO
+# REGISTER
 # ==============================
 
-def register_handlers(application):
-    application.add_handler(CommandHandler("cst", handle_cst))
-    application.add_handler(
-        MessageHandler(filters.Regex(r"^\.cst$"), handle_dot)
-    )
+def register_handlers(app):
+    app.add_handler(CommandHandler("cst", handle_cst))
+    app.add_handler(MessageHandler(filters.Regex(r"^\.cst$"), handle_dot))
