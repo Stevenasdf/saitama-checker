@@ -1,7 +1,8 @@
-# db.py - Core DB SaitamaChk (SIN auto init)
+# db.py - Core DB SaitamaChk (AUTO MIGRATION + PREMIUM TIME)
 
 import sqlite3
 import logging
+import time
 
 # ==============================
 # CONFIG
@@ -15,6 +16,8 @@ RANKS = ("free", "premium", "admin", "owner")
 MAX_PROXIES = 50
 MAX_SHOPIFY_SITES = 50
 MAX_STRIPE_SITES = 50
+
+SECONDS_PER_DAY = 86400
 
 # ==============================
 # LOGGING
@@ -32,6 +35,38 @@ def get_conn():
     conn.row_factory = sqlite3.Row
     return conn
 
+# ==============================
+# AUTO MIGRACIÓN (SEGURA)
+# ==============================
+
+def ensure_premium_until_column():
+    """
+    Asegura que la columna premium_until exista.
+    Seguro para ejecutar múltiples veces.
+    """
+    conn = get_conn()
+    cur = conn.cursor()
+
+    cur.execute("PRAGMA table_info(users)")
+    columns = [row[1] for row in cur.fetchall()]
+
+    if "premium_until" not in columns:
+        log.info("🛠 Agregando columna premium_until a users")
+        cur.execute(
+            "ALTER TABLE users ADD COLUMN premium_until INTEGER DEFAULT 0"
+        )
+        conn.commit()
+    else:
+        log.info("✅ Columna premium_until ya existe")
+
+    conn.close()
+
+# Ejecutar migración al importar db.py
+ensure_premium_until_column()
+
+# ==============================
+# QUERY HELPER
+# ==============================
 
 def q(query, params=(), one=False, all=False):
     conn = get_conn()
@@ -59,35 +94,86 @@ def q(query, params=(), one=False, all=False):
 
 def get_user(user_id):
     return q(
-        "SELECT user_id, rank, days, registered_at FROM users WHERE user_id = ?",
+        "SELECT user_id, rank, days, premium_until, registered_at FROM users WHERE user_id = ?",
         (user_id,),
         one=True
     )
+
 
 def register_user(user_id):
     if get_user(user_id):
         return False, "Ya registrado"
 
     q(
-        "INSERT INTO users (user_id, rank, days) VALUES (?, 'free', 0)",
+        "INSERT INTO users (user_id, rank, days, premium_until) VALUES (?, 'free', 0, 0)",
         (user_id,)
     )
     return True, "OK"
+
 
 def get_user_rank(user_id):
     u = get_user(user_id)
     return u["rank"] if u else "free"
 
+
 def update_user_rank(user_id, rank):
     q("UPDATE users SET rank = ? WHERE user_id = ?", (rank, user_id))
 
-def update_user_days(user_id, delta):
+# ==============================
+# PREMIUM POR TIEMPO REAL
+# ==============================
+
+def get_premium_days_left(user_id):
+    u = get_user(user_id)
+    if not u or not u["premium_until"]:
+        return 0
+
+    now = int(time.time())
+    remaining = u["premium_until"] - now
+
+    if remaining <= 0:
+        return 0
+
+    return remaining // SECONDS_PER_DAY
+
+
+def add_premium_days(user_id, days):
     u = get_user(user_id)
     if not u:
         return False
-    days = max(0, u["days"] + delta)
-    q("UPDATE users SET days = ? WHERE user_id = ?", (days, user_id))
+
+    now = int(time.time())
+    base_time = max(u["premium_until"], now)
+
+    new_until = base_time + (days * SECONDS_PER_DAY)
+    new_days = get_premium_days_left(user_id) + days
+
+    q(
+        "UPDATE users SET premium_until = ?, days = ? WHERE user_id = ?",
+        (new_until, new_days, user_id)
+    )
+
+    if u["rank"] == "free":
+        update_user_rank(user_id, "premium")
+
     return True
+
+
+def remove_premium(user_id):
+    q(
+        "UPDATE users SET premium_until = 0, days = 0 WHERE user_id = ?",
+        (user_id,)
+    )
+    update_user_rank(user_id, "free")
+
+
+def check_premium_expired(user_id):
+    u = get_user(user_id)
+    if not u:
+        return
+
+    if u["rank"] == "premium" and get_premium_days_left(user_id) == 0:
+        remove_premium(user_id)
 
 # ==============================
 # PERMISOS
@@ -96,10 +182,13 @@ def update_user_days(user_id, delta):
 def is_owner(user_id):
     return user_id == OWNER_ID
 
+
 def is_admin(user_id):
     return get_user_rank(user_id) in ("admin", "owner")
 
+
 def is_premium(user_id):
+    check_premium_expired(user_id)
     return get_user_rank(user_id) in ("premium", "admin", "owner")
 
 # ==============================
@@ -113,6 +202,7 @@ def get_user_proxies(user_id):
         all=True
     )
     return [r["proxies"] for r in rows]
+
 
 def add_user_proxy(user_id, proxy):
     if q(
@@ -128,14 +218,17 @@ def add_user_proxy(user_id, proxy):
     )
     return True, "OK"
 
+
 def remove_user_proxy(user_id, proxy):
     q(
         "DELETE FROM proxy_management WHERE user_id = ? AND proxies = ?",
         (user_id, proxy)
     )
 
+
 def clear_user_proxies(user_id):
     q("DELETE FROM proxy_management WHERE user_id = ?", (user_id,))
+
 
 def count_user_proxies(user_id):
     r = q(
@@ -157,6 +250,7 @@ def get_user_shopify_sites(user_id):
     )
     return [r["shopify_sites"] for r in rows]
 
+
 def add_user_shopify_site(user_id, site):
     if q(
         "SELECT 1 FROM shopify_management WHERE user_id = ? AND shopify_sites = ?",
@@ -171,14 +265,17 @@ def add_user_shopify_site(user_id, site):
     )
     return True, "OK"
 
+
 def remove_user_shopify_site(user_id, site):
     q(
         "DELETE FROM shopify_management WHERE user_id = ? AND shopify_sites = ?",
         (user_id, site)
     )
 
+
 def clear_user_shopify_sites(user_id):
     q("DELETE FROM shopify_management WHERE user_id = ?", (user_id,))
+
 
 def count_user_shopify_sites(user_id):
     r = q(
@@ -200,6 +297,7 @@ def get_user_stripe_sites(user_id):
     )
     return [r["stripe_sites"] for r in rows]
 
+
 def add_user_stripe_site(user_id, site):
     if q(
         "SELECT 1 FROM stripe_management WHERE user_id = ? AND stripe_sites = ?",
@@ -214,14 +312,17 @@ def add_user_stripe_site(user_id, site):
     )
     return True, "OK"
 
+
 def remove_user_stripe_site(user_id, site):
     q(
         "DELETE FROM stripe_management WHERE user_id = ? AND stripe_sites = ?",
         (user_id, site)
     )
 
+
 def clear_user_stripe_sites(user_id):
     q("DELETE FROM stripe_management WHERE user_id = ?", (user_id,))
+
 
 def count_user_stripe_sites(user_id):
     r = q(
