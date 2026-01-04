@@ -1,4 +1,4 @@
-# shopify.py - Gestión de Sitios Shopify (FINAL + DB COMPATIBLE)
+# shopify.py - Gestión de Sitios Shopify (FINAL)
 
 import re
 import db
@@ -9,20 +9,34 @@ from telegram.ext import ContextTypes, CommandHandler, MessageHandler, filters
 # VALIDACIÓN
 # ==============================
 
+LIST_PREFIX = re.compile(r"^\s*\d+[\.\-\)]\s*")
+
 def extract_shopify_domain(site: str) -> str:
     if not site:
         return ""
 
     site = site.strip()
-    site = re.sub(r"\s*[-–]\s*\$\d+(?:\.\d+)?", "", site)
-    site = re.sub(r"\s*\$\d+(?:\.\d+)?$", "", site)
+
+    # ❌ ignora comandos (.ash, /ash, etc.)
+    if site.startswith((".", "/")):
+        return ""
+
+    # elimina "1. ", "2) ", "3- "
+    site = LIST_PREFIX.sub("", site)
+
+    # corrige errores humanos tipo "127https://site.com"
+    site = re.sub(r"^\d+", "", site)
 
     site = site.lower()
-    site = site.replace("https://", "").replace("http://", "").replace("www.", "")
+    site = site.replace("https://", "").replace("http://", "")
+    site = site.replace("www.", "")
+
     site = site.split("/")[0].split("?")[0].split("#")[0]
 
-    return site if "." in site else ""
+    if not site or site.isdigit() or site.startswith("."):
+        return ""
 
+    return site if "." in site else ""
 
 def validate_site(raw: str):
     domain = extract_shopify_domain(raw)
@@ -48,7 +62,6 @@ def format_list(sites: list) -> str:
         "📝 <b>Uso:</b> <code>/rsh NÚMERO</code>"
     )
 
-
 def format_add(ok, err, total, failed=None):
     text = (
         "<b>📊 RESULTADO</b>\n\n"
@@ -66,7 +79,6 @@ def format_add(ok, err, total, failed=None):
 
     return text
 
-
 def format_remove(removed, total):
     return (
         "<b>📊 RESULTADO</b>\n\n"
@@ -83,20 +95,15 @@ async def handle_ash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
-    text = msg.text
-    is_dot = text.startswith(".")
+    # mensaje + reply
+    text = msg.text or ""
+    if msg.reply_to_message and msg.reply_to_message.text:
+        text += "\n" + msg.reply_to_message.text
 
-    raw_text = (
-        " ".join(text.split()[1:]) if is_dot else
-        " ".join(context.args) if context.args else
-        msg.reply_to_message.text if msg.reply_to_message else ""
-    )
+    raw_text = " ".join(text.split()[1:])
 
     if not raw_text.strip():
         await msg.reply_text(
@@ -116,13 +123,14 @@ async def handle_ash(update: Update, context: ContextTypes.DEFAULT_TYPE):
     failed = []
 
     for raw in raw_sites:
+        if raw.startswith((".", "/")):
+            continue
+
         if db.check_limit(uid, "shopify_sites"):
             break
 
         valid, site = validate_site(raw)
         if not valid:
-            err += 1
-            failed.append((raw, site))
             continue
 
         success, reason = db.add_user_shopify_site(uid, site)
@@ -149,24 +157,20 @@ async def handle_rsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
     sites = db.get_user_shopify_sites(uid)
     if not sites:
-        await msg.reply_text(
-            "📭 No tienes sitios Shopify.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("📭 No tienes sitios Shopify.", reply_to_message_id=msg.message_id)
         return
 
-    text = msg.text
-    is_dot = text.startswith(".")
+    # mensaje + reply
+    text = msg.text or ""
+    if msg.reply_to_message and msg.reply_to_message.text:
+        text += "\n" + msg.reply_to_message.text
 
-    raw_input = " ".join(text.split()[1:]) if is_dot else " ".join(context.args)
+    raw_input = " ".join(text.split()[1:])
 
     if not raw_input.strip():
         await msg.reply_text(
@@ -178,15 +182,18 @@ async def handle_rsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     removed = 0
 
-    for item in raw_input.split():
-        if item.isdigit():
-            idx = int(item) - 1
+    for token in raw_input.split():
+        if token.startswith((".", "/")):
+            continue
+
+        if token.isdigit() and not msg.reply_to_message:
+            idx = int(token) - 1
             if 0 <= idx < len(sites):
                 db.remove_user_shopify_site(uid, sites[idx])
                 removed += 1
                 sites = db.get_user_shopify_sites(uid)
         else:
-            key = extract_shopify_domain(item)
+            key = extract_shopify_domain(token)
             for s in sites:
                 if key and key in s:
                     db.remove_user_shopify_site(uid, s)
@@ -211,10 +218,7 @@ async def handle_ssh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
     await msg.reply_text(
@@ -232,18 +236,12 @@ async def handle_dsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
 
     if not db.get_user(uid):
-        await msg.reply_text(
-            "❌ Debes registrarte primero.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("❌ Debes registrarte primero.", reply_to_message_id=msg.message_id)
         return
 
     total = db.count_user_shopify_sites(uid)
     if total == 0:
-        await msg.reply_text(
-            "📭 No hay sitios para eliminar.",
-            reply_to_message_id=msg.message_id
-        )
+        await msg.reply_text("📭 No hay sitios para eliminar.", reply_to_message_id=msg.message_id)
         return
 
     db.clear_user_shopify_sites(uid)
@@ -255,7 +253,7 @@ async def handle_dsh(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 # ==============================
-# COMANDOS CON PUNTO
+# DOT
 # ==============================
 
 async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -271,7 +269,7 @@ async def handle_dot(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_dsh(update, context)
 
 # ==============================
-# REGISTRO
+# REGISTER
 # ==============================
 
 def register_handlers(application):
@@ -279,7 +277,6 @@ def register_handlers(application):
     application.add_handler(CommandHandler("rsh", handle_rsh))
     application.add_handler(CommandHandler("ssh", handle_ssh))
     application.add_handler(CommandHandler("dsh", handle_dsh))
-
     application.add_handler(
         MessageHandler(filters.Regex(r"^\.(ash|rsh|ssh|dsh)\b"), handle_dot)
     )
